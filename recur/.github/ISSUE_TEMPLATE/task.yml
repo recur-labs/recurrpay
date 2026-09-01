@@ -1,0 +1,47 @@
+name: Task
+description: A scoped unit of work, sized to one pull request
+labels: ["task"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this matters and where it fits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: What to do
+      description: The specific change. If it does not fit in one pull request, split it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ]
+        - [ ] Tests cover the new behaviour
+        - [ ] `pnpm typecheck` and `pnpm test` pass
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexity
+      options:
+        - Trivial
+        - Medium
+        - High
+    validations:
+      required: true
+
+  - type: textarea
+    id: pointers
+    attributes:
+      label: Where to start
+      description: Files, functions, or an ADR worth reading first.

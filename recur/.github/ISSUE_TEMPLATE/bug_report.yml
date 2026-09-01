@@ -1,0 +1,36 @@
+name: Bug report
+description: Something behaves differently from what the docs or tests say
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        A failing test is the best possible bug report here. Otherwise, the
+        exact requests or the code that triggers it.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: money
+    attributes:
+      label: Does this affect an amount, a charge, or a ledger balance?
+      options:
+        - label: Yes - this can cause a wrong amount to be charged or recorded
