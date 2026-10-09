@@ -1,0 +1,302 @@
+[
+  {
+    "title": "Add a Postgres adapter for PlanStore",
+    "complexity": "Medium",
+    "labels": ["storage", "good first issue"],
+    "body": "`packages/core/src/ports.ts` defines `PlanStore`; only the in-memory adapter exists.\n\nAdd a Postgres implementation in a new `packages/store-postgres` package, plus the `plans` table migration. Amounts are stored as `NUMERIC(23,7)` or as a stroop `BIGINT` — pick one, say why in the PR, and keep it consistent with ADR 0003.\n\n**Acceptance:** the existing in-memory `PlanStore` tests run green against the Postgres adapter via a shared test suite."
+  },
+  {
+    "title": "Add a Postgres adapter for SubscriptionStore",
+    "complexity": "High",
+    "labels": ["storage"],
+    "body": "Implement `SubscriptionStore` against Postgres, including `due(at)`.\n\n`due()` must return only subscriptions whose `current_period_end <= at` **and** whose `next_attempt_at` is null or past. Index accordingly — this query runs every tick.\n\n**Acceptance:** shared store suite passes; `EXPLAIN` shows an index scan, not a sequential scan, on a table of 100k subscriptions."
+  },
+  {
+    "title": "Add a Postgres adapter for InvoiceStore with a uniqueness guarantee",
+    "complexity": "High",
+    "labels": ["storage", "correctness"],
+    "body": "Implement `InvoiceStore` on Postgres. Add a unique index on `(subscription_id, period_start)` so that double-billing a period is impossible at the database level, not only through `findByPeriod`.\n\n**Acceptance:** a test that races two concurrent `create` calls for the same period ends with exactly one invoice and one caught constraint violation."
+  },
+  {
+    "title": "Add Postgres adapters for EventStore and WebhookStore",
+    "complexity": "Medium",
+    "labels": ["storage"],
+    "body": "Implement the remaining two ports. Events are append-only and read newest-first with a limit; webhook secrets must be stored hashed or encrypted at rest, never in plaintext.\n\n**Acceptance:** shared store suite passes; a webhook row read straight from SQL does not reveal a usable signing secret."
+  },
+  {
+    "title": "Write the initial SQL migrations and a migration runner",
+    "complexity": "Medium",
+    "labels": ["storage"],
+    "body": "Pick a migration tool (or ~80 lines of runner — argue for whichever on the issue), add `migrations/0001_init.sql` covering plans, subscriptions, invoices, events, webhook_endpoints.\n\n**Acceptance:** `pnpm migrate` brings an empty database to current, is idempotent, and runs in CI against the compose Postgres."
+  },
+  {
+    "title": "Run the store test suite against both adapters in CI",
+    "complexity": "Medium",
+    "labels": ["storage", "testing"],
+    "body": "Extract the in-memory store tests into a shared conformance suite parameterised by adapter factory, and run it against both in-memory and Postgres in CI.\n\n**Acceptance:** one suite, two adapters, both green; a behavioural difference between adapters fails the build."
+  },
+  {
+    "title": "Lock due subscriptions with SELECT … FOR UPDATE SKIP LOCKED",
+    "complexity": "High",
+    "labels": ["storage", "correctness"],
+    "body": "Two scheduler instances against one database currently double-charge. Make `due()` claim rows with `FOR UPDATE SKIP LOCKED` inside the tick's transaction.\n\n**Acceptance:** a test that runs two concurrent `runBillingCycle` calls against the same Postgres charges each subscription exactly once."
+  },
+  {
+    "title": "Support a configurable page size and cursor on list endpoints",
+    "complexity": "Medium",
+    "labels": ["api", "storage"],
+    "body": "`GET /v1/plans`, `/v1/events` and the invoice list return everything. Add opaque cursor pagination (`?limit=&starting_after=`) through the store ports so it works for both adapters.\n\n**Acceptance:** documented in the README API table; tests cover first page, middle page, and an invalid cursor."
+  },
+  {
+    "title": "Persist the ledger instead of holding it in memory",
+    "complexity": "High",
+    "labels": ["ledger", "storage"],
+    "body": "`packages/ledger` keeps entries in an array, so the audit trail dies with the process. Add a `LedgerStore` port and a Postgres adapter; keep the balance assertion on write.\n\n**Acceptance:** entries survive a restart; `balance()` is a SQL aggregate, not a full scan in JS."
+  },
+  {
+    "title": "Reject an unbalanced entry before any partial write",
+    "complexity": "Trivial",
+    "labels": ["ledger", "good first issue"],
+    "body": "Once the ledger is persisted, `assertBalanced` must run before the transaction opens, not after the first insert.\n\n**Acceptance:** a test proves a rejected entry leaves zero rows behind."
+  },
+  {
+    "title": "Add a reconciliation report: ledger vs invoices",
+    "complexity": "Medium",
+    "labels": ["ledger", "ops"],
+    "body": "Add `pnpm reconcile` that reports, per merchant: invoices marked paid with no settling ledger entry, ledger settlements with no paid invoice, and any account whose receivable balance is non-zero for more than one period.\n\n**Acceptance:** the command exits non-zero when it finds a discrepancy, so it can run in cron."
+  },
+  {
+    "title": "Exercise the SEP-41 executor against Stellar testnet end to end",
+    "complexity": "High",
+    "labels": ["stellar", "milestone:v0.2"],
+    "body": "`SorobanAllowanceExecutor` is written but has never touched a network. Write a scripted testnet run: fund two accounts, `approve` an allowance, charge three monthly periods with a fast clock, and print the transaction hashes.\n\n**Acceptance:** `scripts/testnet-e2e.ts` runs from a clean testnet, and the resulting transaction hashes go in the README."
+  },
+  {
+    "title": "Verify allowance before charging and skip a charge that cannot succeed",
+    "complexity": "Medium",
+    "labels": ["stellar", "good first issue"],
+    "body": "The engine submits a `transfer_from` that simulation will reject when the allowance is short. Call `executor.allowance()` first and fail fast with `insufficient_allowance`, saving the simulation round trip.\n\n**Acceptance:** `MockExecutor`-backed test shows no charge attempted when the allowance is below the plan amount."
+  },
+  {
+    "title": "Classify contract errors from structured diagnostics, not message text",
+    "complexity": "High",
+    "labels": ["stellar", "correctness"],
+    "body": "`classify()` in `soroban-executor.ts` string-matches error messages, which will silently mis-classify when the SDK changes wording. Parse the simulation error's diagnostic events / contract error codes instead, and keep the text match only as a last resort.\n\n**Acceptance:** unit tests use recorded RPC error payloads rather than hand-written strings."
+  },
+  {
+    "title": "Warn merchants when a payer's allowance is running low",
+    "complexity": "Medium",
+    "labels": ["stellar", "api"],
+    "body": "A payer whose allowance covers fewer than two more periods will fail soon. Add a check on each successful charge and emit a new `subscription.allowance_low` event.\n\n**Acceptance:** event type added to the schema, webhook docs, and covered by a test."
+  },
+  {
+    "title": "Add a Horizon classic-payment executor for non-Soroban assets",
+    "complexity": "High",
+    "labels": ["stellar"],
+    "body": "Not every asset is wrapped as a SEP-41 contract. Add a second `PaymentExecutor` for classic payments where the payer has pre-signed a payment (documented limitations and all), behind the same interface.\n\n**Acceptance:** the engine works with either executor with no change to the scheduler; ADR added explaining the trade-off."
+  },
+  {
+    "title": "Handle a transaction that times out but later succeeds",
+    "complexity": "High",
+    "labels": ["stellar", "correctness"],
+    "body": "`confirm()` returns `timeout` after 30s; the transaction can still land afterwards, and the retry would double-charge. Record the submitted transaction hash on the invoice before confirming, and check that hash's final status on the next tick before submitting anything new.\n\n**Acceptance:** a test drives submit → timeout → later success and ends with exactly one settled invoice."
+  },
+  {
+    "title": "Make the confirm timeout and poll interval configurable",
+    "complexity": "Trivial",
+    "labels": ["stellar", "good first issue"],
+    "body": "`confirm()` polls every 1000ms with a fixed deadline. Move both into `SorobanExecutorConfig` with the current values as defaults.\n\n**Acceptance:** a test with a 10ms poll interval no longer takes a second."
+  },
+  {
+    "title": "Resolve the token contract per asset instead of a single env var",
+    "complexity": "Medium",
+    "labels": ["stellar", "api"],
+    "body": "`tokenContractFor` is wired to one env var, so a deployment can only bill one asset. Store the SEP-41 contract id alongside the asset on the plan, and validate it at plan creation.\n\n**Acceptance:** two plans in different assets bill correctly in one cycle."
+  },
+  {
+    "title": "Add plan upgrade and downgrade endpoints",
+    "complexity": "High",
+    "labels": ["api"],
+    "body": "`prorate()` is implemented and tested but nothing calls it. Add `POST /v1/subscriptions/:id/change_plan` that prorates the current period, raises an adjustment invoice when something is owed, and moves the subscription to the new plan.\n\n**Acceptance:** upgrade mid-period charges the difference; downgrade charges nothing and takes effect at the period boundary."
+  },
+  {
+    "title": "Accept idempotency keys on write endpoints",
+    "complexity": "Medium",
+    "labels": ["api", "correctness"],
+    "body": "A merchant retrying `POST /v1/subscriptions` after a timeout creates two subscriptions. Accept an `Idempotency-Key` header, store the first response for 24 hours, and replay it.\n\n**Acceptance:** the same key returns the identical body and status; a different body under the same key is a 409."
+  },
+  {
+    "title": "Back API keys with hashed storage and rotation",
+    "complexity": "High",
+    "labels": ["api", "security"],
+    "body": "`RECUR_API_KEYS` is a comma-separated env var in plaintext. Add a merchant + api_key model, store only a hash, support two live keys per merchant so rotation has no downtime.\n\n**Acceptance:** the env var path still works for local dev but logs a warning; auth is a constant-time hash comparison."
+  },
+  {
+    "title": "Generate an OpenAPI document from the Zod schemas",
+    "complexity": "Medium",
+    "labels": ["api", "docs"],
+    "body": "The schemas in `packages/core/src/schema.ts` already describe every request body. Emit an OpenAPI 3.1 document from them and serve it at `/openapi.json`.\n\n**Acceptance:** the document validates, and CI fails if it drifts from the committed copy."
+  },
+  {
+    "title": "Add rate limiting per API key",
+    "complexity": "Medium",
+    "labels": ["api", "security", "good first issue"],
+    "body": "No limits today. Add a token bucket per key, returning 429 with `Retry-After`.\n\n**Acceptance:** limits are configurable; a test proves the bucket refills."
+  },
+  {
+    "title": "Return a consistent error envelope with a request id",
+    "complexity": "Trivial",
+    "labels": ["api", "good first issue"],
+    "body": "Errors are a mix of `{error}` and `{error, message}` and `{error, issues}`. Standardise on `{error, message, request_id, issues?}` and attach the request id to every response header.\n\n**Acceptance:** every error path in `server.test.ts` asserts the shape."
+  },
+  {
+    "title": "Validate that a plan's asset issuer exists on the network",
+    "complexity": "Medium",
+    "labels": ["api", "stellar"],
+    "body": "A plan can be created with a well-formed but non-existent issuer, and only fails months later at charge time. Check the issuer account exists when the plan is created.\n\n**Acceptance:** validation is skipped when no RPC URL is configured, so offline tests still pass."
+  },
+  {
+    "title": "Add a subscriptions list endpoint with status filtering",
+    "complexity": "Trivial",
+    "labels": ["api", "good first issue"],
+    "body": "There is no way to list subscriptions, only to fetch one by id. Add `GET /v1/subscriptions?status=past_due`.\n\n**Acceptance:** filtered by the calling merchant, paginated, tested for cross-merchant leakage."
+  },
+  {
+    "title": "Add a pause and resume endpoint",
+    "complexity": "Medium",
+    "labels": ["api"],
+    "body": "Merchants need to suspend billing without losing the subscription. Add a `paused` status that `due()` excludes, and endpoints to enter and leave it. Decide and document whether the period end shifts by the paused duration.\n\n**Acceptance:** a paused subscription is never charged; resuming does not retroactively bill the paused periods."
+  },
+  {
+    "title": "Expose the payer's allowance state on the subscription resource",
+    "complexity": "Medium",
+    "labels": ["api", "stellar"],
+    "body": "A merchant cannot tell whether the next charge will succeed. Add `allowance_remaining` and `periods_covered` to the serialised subscription, read through the executor.\n\n**Acceptance:** the field is null rather than an error when no network is configured."
+  },
+  {
+    "title": "Make webhook delivery durable with an outbox",
+    "complexity": "High",
+    "labels": ["webhooks", "milestone:v0.2"],
+    "body": "`deliver()` runs in-process; a crash loses the event. Persist a delivery row per (event, endpoint) with attempt count and next attempt time, and drain it from the scheduler tick.\n\n**Acceptance:** killing the process mid-delivery still results in delivery after restart."
+  },
+  {
+    "title": "Add a webhook delivery log endpoint",
+    "complexity": "Medium",
+    "labels": ["webhooks", "api"],
+    "body": "Merchants debugging an integration cannot see what we sent. Add `GET /v1/webhooks/:id/attempts` with status code, timestamp and attempt number — never the payload body, which may contain payer accounts.\n\n**Acceptance:** paginated and scoped to the calling merchant."
+  },
+  {
+    "title": "Add a manual redelivery endpoint",
+    "complexity": "Medium",
+    "labels": ["webhooks", "api", "good first issue"],
+    "body": "`POST /v1/events/:id/redeliver` to re-send one event to the endpoints subscribed to it.\n\n**Acceptance:** redelivery is rate limited and recorded as a new attempt, not an edit of the old one."
+  },
+  {
+    "title": "Disable an endpoint after sustained failure and tell the merchant",
+    "complexity": "Medium",
+    "labels": ["webhooks"],
+    "body": "An endpoint that has failed every delivery for seven days should be marked inactive rather than retried forever.\n\n**Acceptance:** documented threshold, an event when it happens, and a way to re-enable."
+  },
+  {
+    "title": "Publish a webhook verification snippet for other languages",
+    "complexity": "Trivial",
+    "labels": ["webhooks", "docs", "good first issue"],
+    "body": "`verify()` exists in TypeScript only. Add tested equivalents in Python, Go and PHP to `docs/webhooks.md`.\n\n**Acceptance:** each snippet verifies a fixture payload generated by the TypeScript implementation."
+  },
+  {
+    "title": "Add structured logging with pino across the API",
+    "complexity": "Medium",
+    "labels": ["ops", "good first issue"],
+    "body": "The API logs nothing and `main.ts` uses `console`. Wire pino into Fastify with request ids, and redact API keys and secrets in the serialisers.\n\n**Acceptance:** a test asserts that a request carrying `x-api-key` never logs the key."
+  },
+  {
+    "title": "Add a /metrics endpoint",
+    "complexity": "Medium",
+    "labels": ["ops"],
+    "body": "Expose Prometheus metrics: charges attempted / succeeded / failed by failure code, cycle duration, due-queue depth, webhook delivery outcomes.\n\n**Acceptance:** metrics are on a separate port or behind auth, never on the public API surface."
+  },
+  {
+    "title": "Add a readiness probe distinct from liveness",
+    "complexity": "Trivial",
+    "labels": ["ops", "good first issue"],
+    "body": "`/health` returns ok before storage or RPC has been checked. Add `/ready` that verifies the store and, when configured, the RPC endpoint.\n\n**Acceptance:** Dockerfile healthcheck points at the right one."
+  },
+  {
+    "title": "Emit a warning when a billing cycle overruns the tick interval",
+    "complexity": "Trivial",
+    "labels": ["ops", "good first issue"],
+    "body": "If a cycle takes longer than `RECUR_TICK_INTERVAL_MS` the loops overlap silently. Measure the cycle and log a warning when it exceeds the interval; skip the next tick if one is still running.\n\n**Acceptance:** covered by a test with a deliberately slow executor."
+  },
+  {
+    "title": "Add graceful shutdown to the API",
+    "complexity": "Trivial",
+    "labels": ["ops", "good first issue"],
+    "body": "SIGTERM kills in-flight requests. Close the Fastify server, wait for in-flight work up to a timeout, then exit.\n\n**Acceptance:** a request in flight during SIGTERM completes."
+  },
+  {
+    "title": "Write docs/quickstart.md: zero to first charge on testnet",
+    "complexity": "Medium",
+    "labels": ["docs"],
+    "body": "A single page taking a reader from `git clone` to a settled testnet charge, including funding accounts with friendbot and granting the allowance.\n\n**Acceptance:** someone who has never used Stellar can follow it without opening another tab, and it is verified by running it."
+  },
+  {
+    "title": "Document the failure codes and what a merchant should do about each",
+    "complexity": "Trivial",
+    "labels": ["docs", "good first issue"],
+    "body": "`FailureCode` has eight values with no user-facing documentation. Add a table to `docs/failures.md`: code, what it means, whether it retries, what the merchant should tell the payer.\n\n**Acceptance:** linked from the README and from ADR 0004."
+  },
+  {
+    "title": "Add a sequence diagram of a full billing cycle",
+    "complexity": "Trivial",
+    "labels": ["docs", "good first issue"],
+    "body": "ARCHITECTURE.md describes the cycle in prose. Add a Mermaid sequence diagram covering the success path and the retry path.\n\n**Acceptance:** renders on GitHub; no detail in the diagram contradicts the code."
+  },
+  {
+    "title": "Add a worked example merchant integration",
+    "complexity": "Medium",
+    "labels": ["docs", "examples"],
+    "body": "Add `examples/merchant/` — a ~100-line Express app that creates a plan, subscribes a payer, receives webhooks with signature verification, and gates a route on subscription status.\n\n**Acceptance:** runs against a local Recur with the mock executor, with its own README."
+  },
+  {
+    "title": "Publish a TypeScript client SDK",
+    "complexity": "High",
+    "labels": ["sdk"],
+    "body": "Add `packages/client` — a typed wrapper over the REST API generated from or shared with the Zod schemas, with the webhook verifier included.\n\n**Acceptance:** the example merchant app uses the SDK rather than raw fetch."
+  },
+  {
+    "title": "Set up eslint with a rule banning float arithmetic on amounts",
+    "complexity": "Medium",
+    "labels": ["tooling"],
+    "body": "`pnpm lint` is declared but no eslint config exists. Add a flat config, and a custom rule (or a `no-restricted-syntax` pattern) that rejects `parseFloat`, `Number(` and `toFixed` inside `packages/core` and `packages/ledger`.\n\n**Acceptance:** CI runs lint; the rule catches a deliberately added violation in a test fixture."
+  },
+  {
+    "title": "Add a changeset-based release flow for the published packages",
+    "complexity": "Medium",
+    "labels": ["tooling"],
+    "body": "`@recur/core`, `@recur/ledger` and `@recur/stellar` are publishable but have no versioning story. Add changesets and a release workflow gated on CI.\n\n**Acceptance:** a dry-run publish succeeds in CI without a token."
+  },
+  {
+    "title": "Add property-based tests for billing period arithmetic",
+    "complexity": "High",
+    "labels": ["testing"],
+    "body": "`advance()` has example-based tests. Add fast-check properties: advancing N times equals advancing by N; a period never has zero or negative length; a day-of-month anchor is preserved whenever the target month is long enough.\n\n**Acceptance:** properties run in CI with a fixed seed and a documented budget."
+  },
+  {
+    "title": "Add a fuzz test for amount parsing",
+    "complexity": "Medium",
+    "labels": ["testing", "good first issue"],
+    "body": "`parseAmount` is the boundary between merchant input and money. Fuzz it: every input either throws or round-trips exactly through `formatAmount`.\n\n**Acceptance:** no input produces a value that fails to round-trip."
+  },
+  {
+    "title": "Raise test coverage reporting and add a floor",
+    "complexity": "Trivial",
+    "labels": ["testing", "good first issue"],
+    "body": "Coverage is configured but not reported or enforced. Publish the lcov report from CI and fail below an agreed line threshold for `packages/core` and `packages/ledger`.\n\n**Acceptance:** the threshold is met by the current suite without weakening any test."
+  },
+  {
+    "title": "Add a load test for the billing cycle",
+    "complexity": "High",
+    "labels": ["testing", "ops"],
+    "body": "Seed 100k subscriptions in Postgres with 10k due in one tick, and measure the cycle. Record the numbers in `docs/performance.md`.\n\n**Acceptance:** the run is scripted and repeatable, and identifies the dominant cost rather than just reporting a total."
+  }
+]
